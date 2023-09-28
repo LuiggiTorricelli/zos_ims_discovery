@@ -1,0 +1,3 @@
+---
+# Identifies if the IMSs should be discovered by SYSPLEX or LPAR
+scope: SYSPLEX

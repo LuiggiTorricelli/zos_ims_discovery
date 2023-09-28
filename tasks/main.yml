@@ -1,0 +1,85 @@
+---
+- name: Make sure variables are empty before starting.
+  ansible.builtin.set_fact:
+    zos_ims_discovery_ims_information: []
+
+- name: Display pending system requests.
+  ibm.ibm_zos_core.zos_operator:
+    cmd: "D R,L,SN"
+    verbose: no
+  changed_when: false
+  register: zos_ims_discovery_out_requests
+
+- name: Apply filter and get only the IMS subsystem requests.
+  ansible.builtin.set_fact:
+    zos_ims_discovery_ims_requests: "{{ __imss_per_lpar_or_plex }}"
+    zos_ims_discovery_current_system: "{{ __filtered_requests_out.system }}"
+  vars:
+    __filtered_requests_out: "{{ zos_ims_discovery_out_requests.content | parse_requests }}"
+    __filtered_requests_out_only_imss: "{{ __filtered_requests_out.content.requests | selectattr('message', 'search', 'DFS996I') | list }}"
+    __filtered_requests_out_only_imss_lpar: "{{ __filtered_requests_out_only_imss | selectattr('system', 'eq', __filtered_requests_out.system) | list }}"
+    __imss_per_lpar_or_plex: "{{ (scope | upper == 'LPAR') | ternary(__filtered_requests_out_only_imss_lpar, __filtered_requests_out_only_imss) }}"
+
+- name: Block of tasks to be run only when 1 or more IMS subsystems were found.
+  block:
+    - name: Display IMS subsystem's region and DC information.
+      ibm.ibm_zos_core.zos_operator:
+        cmd: "{{ __cmd_prefix }}DIS ACT."
+        verbose: no
+      register: zos_ims_discovery_out_act
+      loop: "{{ zos_ims_discovery_ims_requests }}"
+      loop_control:
+        label: "{{ {'job_name': item.job_name, 'system': item.system} }}"
+      changed_when: false
+      vars:
+        __ims_id: "{{ item.message | regex_replace('[\\s\\S]+? +(\\S+)$', '\\1') }}"
+        __cmd_prefix: "{{ (item.system == zos_ims_discovery_current_system) | ternary(__ims_id, 'ROUTE ' + item.system + ',' + __ims_id) }}"
+    
+    - name: Display IMS subsystem's online logs.
+      ibm.ibm_zos_core.zos_operator:
+        cmd: "{{ __cmd_prefix }}DIS OLDS."
+        verbose: no
+      register: zos_ims_discovery_out_olds
+      loop: "{{ zos_ims_discovery_ims_requests }}"
+      loop_control:
+        label: "{{ {'job_name': item.job_name, 'system': item.system} }}"
+      changed_when: false
+      vars:
+        __ims_id: "{{ item.message | regex_replace('[\\s\\S]+? +(\\S+)$', '\\1') }}"
+        __cmd_prefix: "{{ (item.system == zos_ims_discovery_current_system) | ternary(__ims_id, 'ROUTE ' + item.system + ',' + __ims_id) }}"
+    
+    - name: Display IMS subsystem's online change libraries status.
+      ibm.ibm_zos_core.zos_operator:
+        cmd: "{{ __cmd_prefix }}DIS MODIFY."
+        verbose: no
+      register: zos_ims_discovery_out_modify
+      loop: "{{ zos_ims_discovery_ims_requests }}"
+      loop_control:
+        label: "{{ {'job_name': item.job_name, 'system': item.system} }}"
+      changed_when: false
+      vars:
+        __ims_id: "{{ item.message | regex_replace('[\\s\\S]+? +(\\S+)$', '\\1') }}"
+        __cmd_prefix: "{{ (item.system == zos_ims_discovery_current_system) | ternary(__ims_id, 'ROUTE ' + item.system + ',' + __ims_id) }}"
+
+    - name: Apply filter to parse data from IMS subsystem's command outputs.
+      ansible.builtin.set_fact:
+        zos_ims_discovery_ims_information: "{{ zos_ims_discovery_ims_information + [ __tmp_dict ] }}"
+      loop: "{{ zos_ims_discovery_ims_requests }}"
+      loop_control:
+        label: "{{ {'job_name': item.job_name, 'system': item.system, 'ims_id': __ims_id} }}"
+      vars:
+        __ims_id: "{{ item.message | regex_replace('[\\s\\S]+? +(\\S+)$', '\\1') }}"
+        __filtered_ims_act_out: "{{ (zos_ims_discovery_out_act.results | selectattr('item.job_name', 'eq', item.job_name))[0].content | default([]) | parse_act }}"
+        __filtered_ims_olds_out: "{{ (zos_ims_discovery_out_olds.results | selectattr('item.job_name', 'eq', item.job_name))[0].content | default([]) | parse_olds }}"
+        __filtered_ims_modify_out: "{{ (zos_ims_discovery_out_modify.results | selectattr('item.job_name', 'eq', item.job_name))[0].content | default([]) | parse_modify }}"
+        __tmp_dict: "{{ {'system': item.system, 'job_name': item.job_name, 'subsystem': __ims_id} | ansible.builtin.combine(__filtered_ims_act_out.content, __filtered_ims_olds_out.content, __filtered_ims_modify_out.content) }}"
+
+    - name: Display discovered list of IMS for z/OS subsystems and its information.
+      ansible.builtin.debug:
+        var: zos_ims_discovery_ims_information
+  when: zos_ims_discovery_ims_requests | length > 0
+
+- name: Display message when no IMS for z/OS subsystems were identified.
+  ansible.builtin.debug:
+    msg: "No IMS for z/OS subsystems were identified based on this z/OS system, based on the informed scope ({{ scope | upper }})."
+  when: zos_ims_discovery_ims_requests | length == 0
