@@ -26,15 +26,14 @@ class FilterModule(object):
                 parse_datasets = re.findall(r'\(([ UAI])\) +(.+)', lib)
                 data_sets = []
                 for dataset in parse_datasets:
-                    match dataset[0]:
-                        case 'A':
-                            tmp_status = 'ACTIVE'
-                        case 'I':
-                            tmp_status = 'INACTIVE'
-                        case 'U':
-                            tmp_status = 'UNALLOCATED'
-                        case '_':
-                            tmp_status = ''
+                    if dataset[0] in ['A']:
+                        tmp_status = 'ACTIVE'
+                    elif dataset[0] in ['I']:
+                        tmp_status = 'INACTIVE'
+                    elif dataset[0] in ['U']:
+                        tmp_status = 'UNALLOCATED'
+                    else:
+                        tmp_status = ''
                     tmp_dataset = {
                         "status": tmp_status,
                         "data_set": dataset[1],
